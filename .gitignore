@@ -9,6 +9,14 @@
 *.user
 *.userosscache
 *.sln.docstates
+*.exe
+*.log
+*.json
+*.env
+*.pdb
+token.txt
+D:/DEV/Disbot/servers.json
+D:/DEV/Disbot/answers.json
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
