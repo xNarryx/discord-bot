@@ -691,7 +691,40 @@ int main() {
                 return;
             }
         }
+        
+        // смайт
+        if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"смайт") && is_admin) {
+            std::vector<std::string> args = split(messagel, ' ');
+            if (args.size() > 3) {
+                int duration = 0;
+                dpp::snowflake user_id = keep_digits(args[1]);
+                try { int duration = std::stoi(args[2]); }
+                catch (...) {
+                    event.reply(to_utf8(L"Неверные аргументы."));
+                    return;
+                }
+                
+                time_t until = parse_duration(args[2]);
 
+                std::string reason = join(args.begin() + 3, args.end(), " ");
+                reason = to_utf8(string_to_wstring(reason));
+                std::cout <<guild_id<< "!"<< user_id << "!" << until << "!" << duration << "!" << reason << "\n";
+                
+                try {
+                    bot.set_audit_reason(url_encode(reason))
+                        .guild_member_timeout(guild_id, user_id, until);
+                    reply = to_utf8(L"Юзер был наказан. и засунут ниже плинтуса на: **") + args[2] + "**";
+                    event.reply(reply);
+                }
+                catch (...) {
+                    event.reply(to_utf8(L"Что-то произошло не так..."));
+                }
+            }
+            else {
+                event.reply(to_utf8(L"Неверный синтаксис! Пример: смайт <id> <время \"с\", \"м\", \"ч\", \"д\"> <причина>"));
+            }
+        }
+        
         // prev/next music/pause
         if (messagel == "next" and is_admin) {
             event.reply("next music");
