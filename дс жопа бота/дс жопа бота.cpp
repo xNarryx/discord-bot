@@ -16,6 +16,7 @@
 #include <random>
 #include <nlohmann/json.hpp>
 #include <cctype>
+#include <regex>
 
 #define VK_MEDIA_NEXT_TRACK 0xB0
 #define VK_MEDIA_PREV_TRACK 0xB1
@@ -534,6 +535,13 @@ std::string join(Iter begin, Iter end, const std::string& separator) {
 	}
 	return result.str();
 }
+std::string https_remove(std::string str) {
+	std::regex link_pattern("https?://[^\\s]+");
+	std::string cleaned = std::regex_replace(str, link_pattern, "");
+	link_pattern = ("<:?[^\\s]+");
+	cleaned = std::regex_replace(cleaned, link_pattern, "");
+	return cleaned;
+}
 
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	std::ofstream* file = static_cast<std::ofstream*>(userp);
@@ -841,7 +849,7 @@ int main() {
 					std::remove("voice.MP3");
 
 					if (message.size() >= 5 and message.size() <= 120) {
-						if (generateSpeech(message)) {
+						if (generateSpeech(https_remove(message))) {
 						}
 						else {
 							std::cerr << to_utf8(L"Ошибка генерации речи! сообщение:") << message << std::endl;
@@ -863,7 +871,7 @@ int main() {
 						std::remove("voice.MP3");
 						message = message.substr(2);
 						if (message.size() >= 5 and message.size() <= 120) {
-							if (generateSpeech(message)) {
+							if (generateSpeech(https_remove(message))) {
 							}
 							else {
 								std::cerr << to_utf8(L"Ошибка генерации речи! сообщение:") << message << std::endl;
@@ -958,7 +966,7 @@ int main() {
 					dpp::snowflake leaderid = std::stoull(keep_digits(args[0]));
 					if (leaderid == author_id) {
 						file.close();
-						mult = static_cast<int>(std::floor(std::log2(message.size())));
+						mult = static_cast<int>(std::floor(std::log2(message.size() + 1)));
 						try {
 							num = std::stoull(keep_digits(args[1]));
 						}
