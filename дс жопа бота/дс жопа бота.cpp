@@ -646,13 +646,27 @@ int main() {
 
 		if (!messagel.rfind(to_utf8(L"меню помощи"))) {
 			if (!is_banned) {
-				if (author_id == adminid && messagel.rfind(to_utf8(L"меню помощи все"))) {
-					event.reply(to_utf8(L"```User send: \n   send to <channel_id> <message> \n   send to user <user_id> <message>\n   бан/разбан <user_id>\n   админ:\n админ добавить <user_id>\n админ снять <user_id>\n   voice - список в гч \n   voice all - озвучка АБСОЛЮТНО всех сообщений в гч\n \n ALL USER COMMAND \n   напомнить <DD.MM.YYYY> <00:00> <remind>\n   лидеры <все>\n   мой опыт\n   опыт <user_id> <итоговое количество опыта>\n   дане\n   ранд <число> \n\n **БАН - Отключение от пользования ботом, человека бот не будет почти полностью воспринимать**```"));
+				if (messagel == to_utf8(L"меню помощи все")) {
+					is_admin = false;
 				}
-				else {
-					wmessage = L"```Доступные команды:\n напомни <ДД.ММ.ГГГГ> <00:00> <Сообщение> - напомнить себе об событии, присылает пинг в ЛС. \n Например: \"напомни завтра 12:22 Пельмени надо снять!\". \n лидеры - Список лидеров сервера \n мой опыт - Узнать сколько експы у тебя сейчас\n опыт <@юзер> - узнать сколько у человека экспы\n дане - отвчетает да или нет на вопрос\n ранд <число> - рандомит число от 0 до выбраного числа \n\nГолосовые чаты:\n join - подключиться к гч (вы должны быть в гч) \n leave - выйти из гч\n stop - остановить проигрывание звука \n soundlist - список звуков для саундпада. Саундпад используется через: ,вививи  \nЧто бы бот озвучил сообщение надо писать так: . пельмени всегда круче.```";
-					message_utf8 = to_utf8(wmessage);
-					event.reply(message_utf8);
+				std::ifstream file("D:\\DEV\\Disbot\\helpmenu.txt");
+				if (file.is_open()) {
+					std::string reply;
+					std::string line;
+
+					while (std::getline(file, line)) {
+						if (line.find("#-") != std::string::npos && is_admin) {
+							reply += "\n" + line;
+						}
+						else if (line.find("#+") != std::string::npos && author_id == 879386342931451914 && is_admin) {
+							reply += "\n" + line;
+						}
+						else if (line.find("#-") == std::string::npos && line.find("#+") == std::string::npos) {
+							reply += "\n" + line;
+						}
+					}
+					event.reply(to_utf8(string_to_wstring(reply)));
+					file.close();
 				}
 			}
 			else {
@@ -712,7 +726,23 @@ int main() {
 				event.reply(to_utf8(L"Неверный синтаксис! Пример: смайт <id> <время \"с\", \"м\", \"ч\", \"д\"> <причина>"));
 			}
 		}
+		// смена ника
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"ник") && is_admin) {
+			message = message + " ";
+			std::vector<std::string> args = split(message, ' ');
+			if (args.size() > 2) {
+				dpp::guild_member gm;
+				gm.user_id = keep_digits(args[1]);
+				gm.guild_id = guild_id;
+				gm.set_nickname(join(args.begin() + 2, args.end(), " "));
 
+				bot.set_audit_reason(url_encode(to_utf8(L"Смена ника")))
+					.guild_edit_member(gm);
+			}
+			else {
+				event.reply(to_utf8(L"Неверный синтаксис! Пример: ник <id> <новый_ник>"));
+			}
+		}
 		// prev/next music/pause
 		if (messagel == "next" and is_admin) {
 			event.reply("next music");
@@ -1136,15 +1166,7 @@ int main() {
 		}
 		// myexp
 		if (messagel.substr(0, messagel.find(" ") + 9) == to_utf8(L"мой опыт") and author_id != bot.me.id) {
-			if (guild_id == 1346922961759633422) {
-				filename = "D:\\DEV\\Disbot\\leadermain.txt";
-			}
-			else if (guild_id == 1284968275364675676) {
-				filename = "D:\\DEV\\Disbot\\leaderfox.txt";
-			}
-			else if (guild_id == 1376956841296265437) {
-				filename = "D:\\DEV\\Disbot\\leaderovh.txt";
-			}
+			filename = server.way_leader;
 			std::ifstream file(filename);
 			if (file.is_open()) {
 				finded = false;
