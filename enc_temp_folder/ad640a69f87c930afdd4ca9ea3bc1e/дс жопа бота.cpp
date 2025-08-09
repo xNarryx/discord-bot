@@ -544,8 +544,11 @@ std::string https_remove(std::string str) {
 }
 std::string replace_mentions_with_names(dpp::cluster& bot, const std::string& message, dpp::snowflake guild_id) {
 	std::string result = message;
+	std::regex mention_pattern("<@!?([0-9]+)>");
+
 	dpp::guild_member gm;
 	std::string name;
+	std::string user_id_str;
 	dpp::snowflake user_id;
 	std::vector<std::string> args = split(message, ' ');
 	for (auto& arg : args) {
@@ -559,6 +562,9 @@ std::string replace_mentions_with_names(dpp::cluster& bot, const std::string& me
 			std::cout << arg << "\n";
 		}
 	}
+
+	std::cout << "!" << name << "!" << join(args.begin(), args.end(), " ") << "\n";
+
 	return join(args.begin(), args.end(), " ");
 }
 
