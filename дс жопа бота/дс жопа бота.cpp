@@ -17,6 +17,8 @@
 #include <nlohmann/json.hpp>
 #include <cctype>
 #include <regex>
+#include <atomic>
+#include <cstdio>
 
 #define VK_MEDIA_NEXT_TRACK 0xB0
 #define VK_MEDIA_PREV_TRACK 0xB1
@@ -44,6 +46,7 @@ struct Server {
 };
 std::vector<std::wstring> yes_responses;
 std::vector<std::wstring> no_responses;
+std::vector<std::string> baned_messages;
 static std::vector<Sound> loadSoundsFromFile(const std::string& filename) {
 	std::vector<Sound> soundLibrary;
 	std::ifstream file(filename);
@@ -478,10 +481,10 @@ void load_responses(const std::string& path) {
 }
 std::string normalize_units(std::string str) {
 	std::map<std::string, std::string> replacements = {
-		{"с", "s"}, {"С", "s"},
-		{"м", "m"}, {"М", "m"},
-		{"ч", "h"}, {"Ч", "h"},
-		{"д", "d"}, {"Д", "d"}
+		{to_utf8(L"с"), "s"}, {to_utf8(L"С"), "s"},
+		{to_utf8(L"м"), "m"}, {to_utf8(L"М"), "m"},
+		{to_utf8(L"ч"), "h"}, {to_utf8(L"Ч"), "h"},
+		{to_utf8(L"д"), "d"}, {to_utf8(L"Д"), "d"}
 	};
 
 	for (const auto& [rus, eng] : replacements) {
@@ -549,17 +552,50 @@ std::string replace_mentions_with_names(dpp::cluster& bot, const std::string& me
 	dpp::snowflake user_id;
 	std::vector<std::string> args = split(message, ' ');
 	for (auto& arg : args) {
-		std::cout << arg.substr(0, 2) << "\n";
 		if (arg.substr(0, 2) == "<@") {
 			user_id = std::stoull(keep_digits(arg));
 			gm.guild_id = guild_id;
 			gm.user_id = user_id;
 			name = gm.get_user()->username;
 			arg = name;
-			std::cout << arg << "\n";
 		}
 	}
 	return join(args.begin(), args.end(), " ");
+}
+void load_banned_messages(const std::string& path) {
+	std::ifstream inFile(path);
+	if (inFile.is_open()) {
+		std::string line;
+		baned_messages.clear();
+		while (std::getline(inFile, line)) {
+			baned_messages.push_back(to_utf8(string_to_wstring(to_lower_utf8(line))));
+		}
+		inFile.close();
+	}
+}
+bool removeLineFromFile(const std::string& filepath, const std::string& target) {
+	std::ifstream infile(filepath);
+	if (!infile.is_open()) return false;
+
+	std::vector<std::string> lines;
+	std::string line;
+
+	while (std::getline(infile, line)) {
+		if (!line.empty() && line != target)
+			lines.push_back(line);
+	}
+	infile.close();
+
+	std::ofstream outfile(filepath, std::ios::trunc);
+	if (!outfile.is_open()) return false;
+
+	for (size_t i = 0; i < lines.size(); ++i) {
+		outfile << lines[i];
+		if (i + 1 < lines.size()) outfile << "\n";
+	}
+	outfile.close();
+
+	return true;
 }
 
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -609,7 +645,10 @@ int main() {
 	filet >> token;
 	filet.close();
 	bool voiceall = false;
+	std::string line;
 	auto beforetimetts = std::chrono::system_clock::now();
+
+	load_banned_messages("D:\\DEV\\Disbot\\banned_messages.txt");
 
 	dpp::cluster bot(token, dpp::i_default_intents | dpp::i_message_content);
 
@@ -634,21 +673,35 @@ int main() {
 	bot.on_message_create([&bot, adminid, &voiceall, &Servers, &beforetimetts](const dpp::message_create_t& event) {
 		size_t space_pos;
 		unsigned long long num;
-		bool finded = false;
-		int linepos = 0, exp = 1, mult = 1;
+		bool finded = false, is_replyed = false;
+		int linepos = 0, exp = 1, mult = 1, size = 1;
 		std::string date, time, leadid, leadstr, line, reply, leaderscount, message_utf8, file, filename, message, messagel;
 		std::wstring wmessage;
 		std::string vmessage = event.msg.content;
+		dpp::snowflake message_id = event.msg.id;
 		dpp::snowflake author_id = event.msg.author.id;
 		dpp::snowflake channel_id = event.msg.channel_id;
 		dpp::snowflake guild_id = event.msg.guild_id;
-		dpp::snowflake strauthor_id, leaderid, user_id, user_uid;
+		dpp::snowflake strauthor_id, leaderid, user_id, user_uid, replied_id, replied_channel;
 		std::vector<std::pair<dpp::snowflake, int>> leaders;
 		std::vector<Sound> soundLibrary = loadSoundsFromFile("D:\\DEV\\Disbot\\sounds.txt");
 		message = to_utf8(string_to_wstring(vmessage));
 		messagel = to_lower_utf8(vmessage);
 		std::random_device rd;
 		std::mt19937 gen(rd());
+		const dpp::message& msg = event.msg;
+		if (msg.message_reference.message_id != 0) {
+			is_replyed = true;
+			replied_id = msg.message_reference.message_id;
+			replied_channel = msg.message_reference.channel_id != 0
+				? msg.message_reference.channel_id
+				: msg.channel_id;
+
+			/*
+			dpp::message reply(msg.channel_id, to_utf8(L"Это ответ на конкретное сообщение!"));
+			reply.message_reference.message_id = replied_id;
+			bot.message_create(reply);*/
+		}
 
 		auto it = std::find_if(Servers.begin(), Servers.end(), [&](Server& s) {
 			return s.guild_id == guild_id;
@@ -672,8 +725,15 @@ int main() {
 				if (file.is_open()) {
 					std::string reply;
 					std::string line;
+					std::vector<std::string> messages;
+					const size_t MAX_LEN = 1800;
 
 					while (std::getline(file, line)) {
+						// пропускаем символы возврата каретки
+						if (!line.empty() && line.back() == '\r')
+							line.pop_back();
+
+						// фильтрация строк
 						if (line.find("#-") != std::string::npos && is_admin) {
 							reply += "\n" + line;
 						}
@@ -683,9 +743,25 @@ int main() {
 						else if (line.find("#-") == std::string::npos && line.find("#+") == std::string::npos) {
 							reply += "\n" + line;
 						}
+
+						// если reply становится слишком длинным — сохраняем и начинаем заново
+						if (reply.size() > MAX_LEN) {
+							messages.push_back(reply);
+							reply.clear();
+						}
 					}
-					event.reply(to_utf8(string_to_wstring(reply)));
+
+					// добавляем остаток
+					if (!reply.empty())
+						messages.push_back(reply);
+
 					file.close();
+
+					// отправляем по кускам
+					for (auto& msg : messages) {
+						event.reply(to_utf8(string_to_wstring(msg)));
+						Sleep(1500);
+					}
 				}
 			}
 			else {
@@ -713,6 +789,175 @@ int main() {
 			}
 		}
 
+		// добавить неприемлемый контент
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"бан") && is_admin) {
+			std::vector<std::string> args = split(messagel, ' ');
+			std::cout << "0\n";
+			if (args.size() > 1) {
+				if (args[1] == to_utf8(L"сообщений")) {
+					std::cout << "1\n";
+					if (args.size() > 2) {
+						std::cout << "2\n";
+						if (args[2] == to_utf8(L"список")) {
+							for (auto arg : baned_messages) {
+								reply = reply + arg + "\n";
+							}
+							reply = to_utf8(L"**Список забаненых сообщений:**\n```") + reply + "``` \n";
+							event.reply(reply);
+						}
+						else {
+							if (args.size() > 3) {
+								std::cout << "3\n";
+								if (args[2] == to_utf8(L"убрать")) {
+									if (removeLineFromFile("D:\\DEV\\Disbot\\banned_messages.txt", args[3])) {
+										std::cout << args[3] << "\n";
+										event.reply(to_utf8(L"Убрала из списка запрещенных сообщений.."));
+										load_banned_messages("D:\\DEV\\Disbot\\banned_messages.txt");
+										return;
+									}
+									else {
+										event.reply(to_utf8(L"Что-то пошло не так"));
+									}
+								}
+								else {
+									if (args[2] == to_utf8(L"добавить")) {
+										std::ofstream file("D:\\DEV\\Disbot\\banned_messages.txt", std::ios::app);
+										if (file.is_open()) {
+											file << args[3] << "\n";
+											event.reply(to_utf8(L"Добавила новый запрет..."));
+											file.close();
+											load_banned_messages("D:\\DEV\\Disbot\\banned_messages.txt");
+											return;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		//удаление не приемливого контента
+		if (author_id != bot.me.id) {
+			std::vector<std::string> args = split(messagel, ' ');
+			for (auto arg : args) {
+				for (auto ban : baned_messages) {
+					if (ban == arg) {
+						bot.set_audit_reason(url_encode(url_encode(to_utf8(L"Причина: сообщение содержит запрещенный контент"))))
+							.message_delete(message_id, channel_id);
+					}
+				}
+			}
+		}
+
+		//закрепить/открепить
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"закрепить") && is_admin) {
+			std::vector<std::string> args = split(messagel, ' ');
+			if (args.size() > 1) {
+				bot.message_pin(args[2], args[1]);
+				event.reply(to_utf8(L"Закреплено!"));
+			}
+			else {
+				if (is_replyed) {
+					bot.message_pin(replied_channel, replied_id);
+					event.reply(to_utf8(L"Закреплено!"));
+				}
+				else {
+					event.reply(to_utf8(L"Неверные аргументы / Нету ответа на сообщение."));
+				}
+			}
+		}
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"открепить") && is_admin) {
+			std::vector<std::string> args = split(messagel, ' ');
+			if (args.size() > 1) {
+				bot.message_unpin(args[2], args[1]);
+				event.reply(to_utf8(L"Открепила..."));
+			}
+			else {
+				if (is_replyed) {
+					bot.message_unpin(replied_channel, replied_id);
+					event.reply(to_utf8(L"Открепила..."));
+				}
+				else {
+					event.reply(to_utf8(L"Неверные аргументы / Нету ответа на сообщение."));
+				}
+			}
+		}
+		// удаление сообщение на ответ
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"удалить") && is_admin) {
+			std::vector<std::string> args = split(messagel, ' ');
+			if (is_replyed) {
+				if (args.size() > 1) {
+					if (args[1] == to_utf8(L"до")) {
+						try { size = std::stoi(args[2]); }
+						catch (...) {
+							event.reply(to_utf8(L"Неверные аргументы."));
+							return;
+						}
+						bot.messages_get(replied_channel, 0, replied_id, 0, size, [&bot, replied_channel, message_id, channel_id](const dpp::confirmation_callback_t& cc) {
+							dpp::message_map msgs = std::get<dpp::message_map>(cc.value);
+							std::cout << "Найдено сообщений: " << msgs.size() << std::endl;
+
+							for (auto& [id, msg] : msgs) {
+								bot.message_delete(id, replied_channel);
+								Sleep(650);
+							}
+							Sleep(650);
+							bot.message_delete(message_id, channel_id);
+							});
+					}if (args[1] == to_utf8(L"после")) {
+						try { size = std::stoi(args[2]); }
+						catch (...) {
+							event.reply(to_utf8(L"Неверные аргументы."));
+							return;
+						}
+						bot.messages_get(replied_channel, 0, 0, replied_id, size, [&bot, replied_channel, message_id, channel_id](const dpp::confirmation_callback_t& cc) {
+							dpp::message_map msgs = std::get<dpp::message_map>(cc.value);
+							std::cout << "Найдено сообщений: " << msgs.size() << std::endl;
+
+							for (auto& [id, msg] : msgs) {
+								bot.message_delete(id, replied_channel);
+								Sleep(650);
+							}
+							Sleep(650);
+							bot.message_delete(message_id, channel_id);
+							});
+					}if (args[1] == to_utf8(L"вокруг")) {
+						try { size = std::stoi(args[2]); }
+						catch (...) {
+							event.reply(to_utf8(L"Неверные аргументы."));
+							return;
+						}
+						bot.messages_get(replied_channel, replied_id, 0, 0, size, [&bot, replied_channel, message_id, channel_id](const dpp::confirmation_callback_t& cc) {
+							dpp::message_map msgs = std::get<dpp::message_map>(cc.value);
+							std::cout << "Найдено сообщений: " << msgs.size() << std::endl;
+
+							for (auto& [id, msg] : msgs) {
+								bot.message_delete(id, replied_channel);
+								Sleep(650);
+							}
+							Sleep(650);
+							bot.message_delete(message_id, channel_id);
+							});
+					}
+				}
+				else {
+					bot.message_delete(replied_id, replied_channel);
+					bot.message_delete(message_id, channel_id);
+					return;
+				}
+			}
+
+			if (args.size() > 2) {
+				try {
+					bot.message_delete(keep_digits(args[1]), keep_digits(args[2]));
+				}
+				catch (...) {
+					event.reply(to_utf8(L"Неверные аргументы"));
+				}
+				return;
+			}
+		}
 		// смайт
 		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"смайт") || messagel.substr(0, messagel.find(" ")) == to_utf8(L"мут") && is_admin) {
 			std::vector<std::string> args = split(messagel, ' ');
@@ -724,11 +969,20 @@ int main() {
 					event.reply(to_utf8(L"Неверные аргументы."));
 					return;
 				}
-
 				time_t until = parse_duration(args[2]);
+				if (args[3] == to_utf8(L"сервер") && author_id == 879386342931451914) {
+					args[3] = "";
+					guild_id = keep_digits(args[4]);
+					args[4] = "";
+				}
 
 				std::string reason = join(args.begin() + 3, args.end(), " ");
-				reason = to_utf8(string_to_wstring(reason));
+
+				dpp::guild_member gm;
+				gm.user_id = keep_digits(std::to_string(author_id));
+				gm.guild_id = guild_id;
+
+				reason = to_utf8(string_to_wstring(to_utf8(L"Юзер который замутил: ") + gm.get_user()->username + to_utf8(L" Причина:") + reason));
 				std::cout << guild_id << "!" << user_id << "!" << until << "!" << duration << "!" << reason << "\n";
 
 				try {
@@ -913,7 +1167,7 @@ int main() {
 				if (v) {
 					std::remove("voice.MP3");
 
-					if (message.size() >= 5 and message.size() <= 120) {
+					if (message.size() >= 5 and message.size() <= 200) {
 						std::string text_with_names = replace_mentions_with_names(bot, message, guild_id);
 						if (generateSpeech(https_remove(text_with_names))) {
 						}
@@ -922,6 +1176,7 @@ int main() {
 						}
 					}
 
+					Sleep(100);
 					std::ifstream testFile("voice.MP3", std::ios::binary | std::ios::ate);
 					testFile.close();
 
@@ -936,7 +1191,7 @@ int main() {
 					if (v) {
 						std::remove("voice.MP3");
 						message = message.substr(2);
-						if (message.size() >= 5 and message.size() <= 120) {
+						if (message.size() >= 5 and message.size() <= 200) {
 							std::string text_with_names = replace_mentions_with_names(bot, message, guild_id);
 							std::cout << text_with_names << "\n";
 							if (generateSpeech(https_remove(text_with_names))) {
@@ -945,6 +1200,7 @@ int main() {
 								std::cerr << to_utf8(L"Ошибка генерации речи! сообщение:") << message << std::endl;
 							}
 						}
+						Sleep(100);
 						std::ifstream testFile("voice.MP3", std::ios::binary | std::ios::ate);
 						testFile.close();
 
@@ -1363,11 +1619,14 @@ int main() {
 				reply = to_utf8(L"Забаненые айди для бота : \n") + reply;
 				event.reply(reply);
 			}
-			if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"бан") && is_admin) {
-				if (std::stoull(keep_digits(messagel)) != 0) {
-					server.banned_ids.push_back(keep_digits(messagel));
-					event.reply(to_utf8(L"Юзер был отключен от пользования ботом"));
-					save_servers_to_json("D:\\DEV\\Disbot\\servers.json", Servers);
+			std::vector<std::string> args = split(messagel, ' ');
+			if (args.size() == 2) {
+				if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"бан") && is_admin) {
+					if (std::stoull(keep_digits(messagel)) != 0) {
+						server.banned_ids.push_back(keep_digits(messagel));
+						event.reply(to_utf8(L"Юзер был отключен от пользования ботом"));
+						save_servers_to_json("D:\\DEV\\Disbot\\servers.json", Servers);
+					}
 				}
 			}
 		}
