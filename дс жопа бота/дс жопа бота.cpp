@@ -24,6 +24,7 @@
 #define VK_MEDIA_PREV_TRACK 0xB1
 #define KEYEVENTF_KEYUP 0x0002
 #define VK_MEDIA_PLAY_PAUSE 0xB3
+std::atomic<bool> stop_playback = false;
 
 struct Reminder {
 	std::string date;
@@ -42,6 +43,7 @@ struct Server {
 	std::string way_logs;
 	std::vector<dpp::snowflake> banned_ids;
 	std::vector<dpp::snowflake> admin_ids;
+	float music_volume;
 	bool voice_all;
 };
 std::vector<std::wstring> yes_responses;
@@ -98,6 +100,15 @@ static std::string to_utf8(const std::wstring& wstr) {
 	return str_to;
 }
 std::vector<Reminder> reminders;
+
+void stopAudio(std::optional<bool> new_state = std::nullopt) {
+	if (new_state.has_value()) {
+		stop_playback = new_state.value();
+	}
+	else {
+		stop_playback = !stop_playback;
+	}
+}
 
 std::string keep_digits(std::string str) {
 	std::erase_if(str, [](unsigned char c) {
@@ -350,8 +361,8 @@ static std::string wstring_to_string(const std::wstring& wstr) {
 }
 std::vector<int16_t> decodeMP3ToPCM(const std::string& file_path, float volume = 1.0f) {
 	std::vector<int16_t> pcmdata;
+	volume = volume / 2;
 
-	// Инициализация mpg123
 	mpg123_init();
 	int err = 0;
 	unsigned char* buffer;
@@ -359,7 +370,6 @@ std::vector<int16_t> decodeMP3ToPCM(const std::string& file_path, float volume =
 	int channels, encoding;
 	long rate;
 
-	// Создаем mpg123-хендлер
 	mpg123_handle* mh = mpg123_new(NULL, &err);
 	mpg123_param(mh, MPG123_FORCE_RATE, 48000, 48000.0);
 	mpg123_open(mh, file_path.c_str());
@@ -407,7 +417,7 @@ std::vector<Server> load_servers(const std::string& filename) {
 		for (const auto& id : item.value("banned_id", std::vector<uint64_t>{})) {
 			s.banned_ids.push_back(dpp::snowflake(id));
 		}
-
+		s.music_volume = item.at("music_volume").get<float>();
 		for (const auto& id : item.value("admin_id", std::vector<uint64_t>{})) {
 			s.admin_ids.push_back(dpp::snowflake(id));
 		}
@@ -457,7 +467,8 @@ void save_servers_to_json(const std::string& path, const std::vector<Server>& se
 			{"way_logs", s.way_logs},
 			{"banned_id", banned},
 			{"admin_id", admins},
-			{"voiceall", s.voice_all}
+			{"voiceall", s.voice_all},
+			{"music_volume", s.music_volume}
 			});
 	}
 
@@ -633,6 +644,32 @@ bool generateSpeech(const std::string& text) {
 	file.close();
 
 	return res == CURLE_OK;
+}
+void playAudioFromFile(const std::string& url, dpp::voiceconn* voiceclient, float volume, dpp::message_create_t event) {
+	stop_playback = false;
+	std::string path = "temp_audio.mp3";
+
+	event.reply(to_utf8(L"Начала загрузку..."));
+	std::string cmd = "yt-dlp -x --audio-format mp3 -o \"" + path + "\" \"" + url + "\" --quiet";
+	int ret = std::system(cmd.c_str());
+	if (ret != 0) {
+		std::cout << "Ошибка скачивания!" << std::endl;
+		event.reply(to_utf8(L"Ошибка скачивания..!"));
+		return;
+	}
+
+	std::vector<int16_t> pcmdata = decodeMP3ToPCM(path, volume);
+
+	const size_t chunk_size = 48000; // 1 секунда ~ 48k сэмплов
+	for (size_t i = 0; i < pcmdata.size() && !stop_playback; i += chunk_size) {
+		size_t len = std::min(chunk_size, pcmdata.size() - i);
+		voiceclient->voiceclient->send_audio_raw((uint16_t*)&pcmdata[i], len * 2);
+	}
+
+	pcmdata.clear();
+	std::remove(path.c_str());
+	std::cout << "Audio finished!" << std::endl;
+	event.reply(to_utf8(L"Загрузила!"));
 }
 
 int main() {
@@ -1027,11 +1064,11 @@ int main() {
 			keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0);
 			keybd_event(VK_MEDIA_PREV_TRACK, 0, KEYEVENTF_KEYUP, 0);
 		}
-		if (messagel == to_utf8(L"пауза")) {
+		/*if (messagel == to_utf8(L"пауза")) {
 			event.reply(to_utf8(L"попытка остановить или воспроизвести"));
 			keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0);
 			keybd_event(VK_MEDIA_PLAY_PAUSE, 0, KEYEVENTF_KEYUP, 0);
-		}
+		}*/
 		// да нет
 		if (messagel.rfind(to_utf8(L"дане")) != std::string::npos and author_id != bot.me.id) {
 			load_responses("D:\\DEV\\Disbot\\yesno.json");
@@ -1075,6 +1112,37 @@ int main() {
 			}
 		}
 
+		//audio volume
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"громкость")) {
+			std::vector<std::string> args = split(message, ' ');
+			if (args.size() > 1) {
+				if ((std::stof(args[1]) / 100.0f) * 0.1f < 0.5f) {
+					server.music_volume = (std::stof(args[1]) / 100.0f) * 0.1f;
+					save_servers_to_json("D:\\DEV\\Disbot\\servers.json", Servers);
+					event.reply(to_utf8(L"Изменила громкость"));
+				}
+				else {
+					event.reply(to_utf8(L"Слишком большое значение / не верное значение - диапазон от 0 до 500 (%)"));
+				}
+			}
+			else {
+				reply = to_utf8(L"Текущая громкость: ") + std::to_string(static_cast<int>(std::round(server.music_volume * 1000))) + "%";
+				event.reply(reply);
+			}
+		}
+		//plaing audio
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"плей")) {
+			dpp::voiceconn* v = event.from()->get_voice(guild_id);
+			if (v) {
+				std::cout << "first one\n";
+				std::vector<std::string> args = split(message, ' ');
+				std::string urls = args[1];
+				std::thread t([urls, v, event, server] {
+					playAudioFromFile(urls, v, server.music_volume, event);
+					});
+				t.detach();
+			}
+		}
 		// voice list users
 		if (messagel == "voice" and is_admin) {
 			dpp::guild* g = dpp::find_guild(guild_id);
@@ -1107,10 +1175,9 @@ int main() {
 			event.reply(reply);
 		}
 		// join vc
-		if (messagel.substr(0, 4) == "join" and author_id != bot.me.id) {
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"зайти") and author_id != bot.me.id) {
 			dpp::guild* g = dpp::find_guild(guild_id);
 
-			/* Attempt to connect to a voice channel, returns false if we fail to connect. */
 			message = message.substr(message.find(" ") + 1);
 			message = message.substr(message.find("@") + 1);
 			user_uid = message.substr(0, message.find(">"));
@@ -1126,7 +1193,7 @@ int main() {
 			author_id = bot.me.id;
 		}
 		// leave vc
-		if (messagel.substr(0, 5) == "leave" and author_id != bot.me.id) {
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"выйти") and author_id != bot.me.id) {
 			auto g = dpp::find_guild(guild_id);
 			if (g) {
 				event.from()->disconnect_voice(guild_id);
@@ -1145,16 +1212,6 @@ int main() {
 			else {
 				server.voice_all = true;
 				event.reply(to_utf8(L"Включаю озвучку всех сообщений"));
-			}
-		}
-		// user name
-		if (messagel.rfind(to_utf8(L"имя")) != std::string::npos and is_admin) {
-			std::vector<std::string> args = split(messagel, ' ');
-			dpp::guild_member gm;
-			gm.user_id = keep_digits(args[1]);
-			if (std::stoull(args[1])) {
-				gm.guild_id = guild_id;
-				event.reply(gm.get_user()->username);
 			}
 		}
 		// TTS
@@ -1212,20 +1269,17 @@ int main() {
 			}
 			beforetimetts = std::chrono::system_clock::now();
 		}
-
 		//stop audio
-		if (messagel.substr(0, 4) == "skip" || messagel.substr(0, 4) == "stop") {
-			if (message.substr(0, 4) == "stop") {
-				for (int i = 0; i++; i > 10) {
-					std::this_thread::sleep_for(std::chrono::milliseconds(50));
-					dpp::voiceconn* v = event.from()->get_voice(guild_id);
-					v->voiceclient->stop_audio();
-				}
+		if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"стоп") || messagel.substr(0, messagel.find(" ")) == to_utf8(L"скип")) {
+			if (messagel.substr(0, messagel.find(" ")) == to_utf8(L"стоп")) {
+				dpp::voiceconn* v = event.from()->get_voice(guild_id);
+				v->voiceclient->stop_audio();
+				stopAudio(false);
 			}
 			dpp::voiceconn* v = event.from()->get_voice(guild_id);
 			v->voiceclient->stop_audio();
 		}
-		// Soundpad
+		// Soundpadu
 		if (message.substr(0, 1) == ",") {
 			message = message.substr(1);
 			dpp::voiceconn* v = event.from()->get_voice(guild_id);
@@ -1234,14 +1288,20 @@ int main() {
 					if (message == sound.command) {
 						std::cout << "reading sound\n";
 						std::vector<int16_t> pcmdata = decodeMP3ToPCM(sound.file_path, sound.volume);
-						v->voiceclient->send_audio_raw((uint16_t*)pcmdata.data(), pcmdata.size() * 2);
-						return;
+						if (!stop_playback) {
+							v->voiceclient->send_audio_raw((uint16_t*)pcmdata.data(), pcmdata.size() * 2);
+							return;
+						}
+						else {
+							pcmdata.clear();
+							return;
+						}
 					}
 				}
 			}
 		}
 		//sound list
-		if (messagel == "soundlist" and author_id != bot.me.id) {
+		if (messagel == to_utf8(L"саундлист") and author_id != bot.me.id) {
 			std::string replymessage;
 
 			for (const auto& sound : soundLibrary) {
@@ -1251,6 +1311,16 @@ int main() {
 			event.reply(to_utf8(string_to_wstring(replymessage)));
 		}
 
+		// user name
+		if (messagel.rfind(to_utf8(L"имя")) != std::string::npos and is_admin) {
+			std::vector<std::string> args = split(messagel, ' ');
+			dpp::guild_member gm;
+			gm.user_id = keep_digits(args[1]);
+			if (std::stoull(args[1])) {
+				gm.guild_id = guild_id;
+				event.reply(gm.get_user()->username);
+			}
+		}
 		// leaders
 		if (messagel.substr(0, 12) == to_utf8(L"лидеры") and author_id != bot.me.id) {
 			int leaderssize = 10;
